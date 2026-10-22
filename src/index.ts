@@ -19,7 +19,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 3300;
 
 if (!GOOGLE_MAPS_API_KEY) {
   console.error("Error: GOOGLE_MAPS_API_KEY environment variable is required.");
