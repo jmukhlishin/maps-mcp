@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import express, { Request, Response } from "express";
+import cors from "cors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -17,6 +19,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
+const PORT = Number(process.env.PORT) || 3000;
 
 if (!GOOGLE_MAPS_API_KEY) {
   console.error("Error: GOOGLE_MAPS_API_KEY environment variable is required.");
@@ -35,11 +38,13 @@ const TOOLS: Tool[] = [
       properties: {
         origin: {
           type: "string",
-          description: "The starting address, place name, or lat,lng coordinates.",
+          description:
+            "The starting address, place name, or lat,lng coordinates.",
         },
         destination: {
           type: "string",
-          description: "The destination address, place name, or lat,lng coordinates.",
+          description:
+            "The destination address, place name, or lat,lng coordinates.",
         },
         mode: {
           type: "string",
@@ -59,15 +64,18 @@ const TOOLS: Tool[] = [
       properties: {
         query: {
           type: "string",
-          description: "The text string on which to search, for example: 'restaurant in Jakarta'.",
+          description:
+            "The text string on which to search, for example: 'restaurant in Jakarta'.",
         },
         location: {
           type: "string",
-          description: "Optional latitude,longitude around which to retrieve place information (e.g., '-6.2088,106.8456').",
+          description:
+            "Optional latitude,longitude around which to retrieve place information (e.g., '-6.2088,106.8456').",
         },
         radius: {
           type: "number",
-          description: "Optional distance in meters within which to bias place results.",
+          description:
+            "Optional distance in meters within which to bias place results.",
         },
       },
       required: ["query"],
@@ -82,7 +90,8 @@ const TOOLS: Tool[] = [
       properties: {
         address: {
           type: "string",
-          description: "The street address or place name that you want to geocode.",
+          description:
+            "The street address or place name that you want to geocode.",
         },
       },
       required: ["address"],
@@ -121,237 +130,290 @@ const TOOLS: Tool[] = [
   },
 ];
 
-const server = new Server(
-  {
-    name: "maps-mcp",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
+function createMcpServer(): Server {
+  const server = new Server(
+    {
+      name: "maps-mcp",
+      version: "1.0.0",
     },
-  }
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: TOOLS,
-  };
-});
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  try {
-    switch (name) {
-      case "get_directions": {
-        const origin = String(args?.origin || "");
-        const destination = String(args?.destination || "");
-        const mode = (args?.mode as TravelMode) || TravelMode.driving;
-
-        if (!origin || !destination) {
-          throw new Error("Both 'origin' and 'destination' are required.");
-        }
-
-        const response = await mapsClient.directions({
-          params: {
-            origin,
-            destination,
-            mode,
-            key: GOOGLE_MAPS_API_KEY,
-          },
-        });
-
-        const routes = response.data.routes.map((route) => ({
-          summary: route.summary,
-          legs: route.legs.map((leg) => ({
-            start_address: leg.start_address,
-            end_address: leg.end_address,
-            distance: leg.distance,
-            duration: leg.duration,
-            steps: leg.steps.map((step) => ({
-              instructions: step.html_instructions,
-              distance: step.distance,
-              duration: step.duration,
-              travel_mode: step.travel_mode,
-            })),
-          })),
-        }));
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: response.data.status,
-                  routes,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      case "search_places": {
-        const query = String(args?.query || "");
-        const location = args?.location ? String(args.location) : undefined;
-        const radius = args?.radius ? Number(args.radius) : undefined;
-
-        if (!query) {
-          throw new Error("'query' is required.");
-        }
-
-        const response = await mapsClient.textSearch({
-          params: {
-            query,
-            ...(location ? { location } : {}),
-            ...(radius ? { radius } : {}),
-            key: GOOGLE_MAPS_API_KEY,
-          },
-        });
-
-        const places = response.data.results.map((place) => ({
-          name: place.name,
-          formatted_address: place.formatted_address,
-          location: place.geometry?.location,
-          rating: place.rating,
-          user_ratings_total: place.user_ratings_total,
-          place_id: place.place_id,
-          types: place.types,
-        }));
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: response.data.status,
-                  places,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      case "geocode_address": {
-        const address = String(args?.address || "");
-
-        if (!address) {
-          throw new Error("'address' is required.");
-        }
-
-        const response = await mapsClient.geocode({
-          params: {
-            address,
-            key: GOOGLE_MAPS_API_KEY,
-          },
-        });
-
-        const results = response.data.results.map((result) => ({
-          formatted_address: result.formatted_address,
-          location: result.geometry.location,
-          place_id: result.place_id,
-          types: result.types,
-        }));
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: response.data.status,
-                  results,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      case "distance_matrix": {
-        const origins = Array.isArray(args?.origins)
-          ? args.origins.map(String)
-          : [];
-        const destinations = Array.isArray(args?.destinations)
-          ? args.destinations.map(String)
-          : [];
-        const mode = (args?.mode as TravelMode) || TravelMode.driving;
-        const units =
-          args?.units === "imperial"
-            ? UnitSystem.imperial
-            : UnitSystem.metric;
-
-        if (origins.length === 0 || destinations.length === 0) {
-          throw new Error("Both 'origins' and 'destinations' arrays are required.");
-        }
-
-        const response = await mapsClient.distancematrix({
-          params: {
-            origins,
-            destinations,
-            mode,
-            units,
-            key: GOOGLE_MAPS_API_KEY,
-          },
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: response.data.status,
-                  origin_addresses: response.data.origin_addresses,
-                  destination_addresses: response.data.destination_addresses,
-                  rows: response.data.rows,
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+    {
+      capabilities: {
+        tools: {},
+      },
     }
-  } catch (error: any) {
-    const errorMessage =
-      error?.response?.data?.error_message ||
-      error?.message ||
-      String(error);
+  );
 
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ error: errorMessage }, null, 2),
-        },
-      ],
-      isError: true,
+      tools: TOOLS,
     };
-  }
-});
+  });
 
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Google Maps MCP Server running on stdio");
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+
+    try {
+      switch (name) {
+        case "get_directions": {
+          const origin = String(args?.origin || "");
+          const destination = String(args?.destination || "");
+          const mode = (args?.mode as TravelMode) || TravelMode.driving;
+
+          if (!origin || !destination) {
+            throw new Error("Both 'origin' and 'destination' are required.");
+          }
+
+          const response = await mapsClient.directions({
+            params: {
+              origin,
+              destination,
+              mode,
+              key: GOOGLE_MAPS_API_KEY!,
+            },
+          });
+
+          const routes = response.data.routes.map((route) => ({
+            summary: route.summary,
+            legs: route.legs.map((leg) => ({
+              start_address: leg.start_address,
+              end_address: leg.end_address,
+              distance: leg.distance,
+              duration: leg.duration,
+              steps: leg.steps.map((step) => ({
+                instructions: step.html_instructions,
+                distance: step.distance,
+                duration: step.duration,
+                travel_mode: step.travel_mode,
+              })),
+            })),
+          }));
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: response.data.status,
+                    routes,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case "search_places": {
+          const query = String(args?.query || "");
+          const location = args?.location ? String(args.location) : undefined;
+          const radius = args?.radius ? Number(args.radius) : undefined;
+
+          if (!query) {
+            throw new Error("'query' is required.");
+          }
+
+          const response = await mapsClient.textSearch({
+            params: {
+              query,
+              ...(location ? { location } : {}),
+              ...(radius ? { radius } : {}),
+              key: GOOGLE_MAPS_API_KEY!,
+            },
+          });
+
+          const places = response.data.results.map((place) => ({
+            name: place.name,
+            formatted_address: place.formatted_address,
+            location: place.geometry?.location,
+            rating: place.rating,
+            user_ratings_total: place.user_ratings_total,
+            place_id: place.place_id,
+            types: place.types,
+          }));
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: response.data.status,
+                    places,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case "geocode_address": {
+          const address = String(args?.address || "");
+
+          if (!address) {
+            throw new Error("'address' is required.");
+          }
+
+          const response = await mapsClient.geocode({
+            params: {
+              address,
+              key: GOOGLE_MAPS_API_KEY!,
+            },
+          });
+
+          const results = response.data.results.map((result) => ({
+            formatted_address: result.formatted_address,
+            location: result.geometry.location,
+            place_id: result.place_id,
+            types: result.types,
+          }));
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: response.data.status,
+                    results,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case "distance_matrix": {
+          const origins = Array.isArray(args?.origins)
+            ? args.origins.map(String)
+            : [];
+          const destinations = Array.isArray(args?.destinations)
+            ? args.destinations.map(String)
+            : [];
+          const mode = (args?.mode as TravelMode) || TravelMode.driving;
+          const units =
+            args?.units === "imperial"
+              ? UnitSystem.imperial
+              : UnitSystem.metric;
+
+          if (origins.length === 0 || destinations.length === 0) {
+            throw new Error(
+              "Both 'origins' and 'destinations' arrays are required."
+            );
+          }
+
+          const response = await mapsClient.distancematrix({
+            params: {
+              origins,
+              destinations,
+              mode,
+              units,
+              key: GOOGLE_MAPS_API_KEY!,
+            },
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: response.data.status,
+                    origin_addresses: response.data.origin_addresses,
+                    destination_addresses: response.data.destination_addresses,
+                    rows: response.data.rows,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        default:
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.data?.error_message ||
+        error?.message ||
+        String(error);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: errorMessage }, null, 2),
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
+
+  return server;
 }
 
-main().catch((error) => {
-  console.error("Fatal error running server:", error);
-  process.exit(1);
+const app = express();
+app.use(cors());
+
+// Store active SSE transports by sessionId
+const transports = new Map<string, SSEServerTransport>();
+
+// Health check endpoint
+app.get("/health", (_req: Request, res: Response) => {
+  res.status(200).json({
+    status: "ok",
+    service: "maps-mcp",
+    activeSessions: transports.size,
+  });
+});
+
+// SSE connection initialization endpoint
+app.get("/sse", async (req: Request, res: Response) => {
+  console.log("New SSE connection established");
+  const transport = new SSEServerTransport("/messages", res);
+  const server = createMcpServer();
+
+  transports.set(transport.sessionId, transport);
+
+  res.on("close", () => {
+    console.log(`SSE connection closed for session: ${transport.sessionId}`);
+    transports.delete(transport.sessionId);
+    server.close().catch(() => {});
+  });
+
+  await server.connect(transport);
+});
+
+// Endpoint to receive messages from MCP client
+app.post("/messages", async (req: Request, res: Response) => {
+  const sessionId = req.query.sessionId as string | undefined;
+
+  let transport: SSEServerTransport | undefined;
+  if (sessionId) {
+    transport = transports.get(sessionId);
+  } else if (transports.size === 1) {
+    transport = Array.from(transports.values())[0];
+  }
+
+  if (!transport) {
+    res.status(400).json({ error: "No active SSE transport found for sessionId" });
+    return;
+  }
+
+  await transport.handlePostMessage(req, res);
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Google Maps MCP Server (SSE) listening on http://0.0.0.0:${PORT}`);
+  console.log(`- SSE Endpoint: http://0.0.0.0:${PORT}/sse`);
+  console.log(`- Messages Endpoint: http://0.0.0.0:${PORT}/messages`);
+  console.log(`- Health Endpoint: http://0.0.0.0:${PORT}/health`);
 });
