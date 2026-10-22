@@ -6,10 +6,10 @@ services:
     container_name: maps-mcp
     restart: unless-stopped
     ports:
-      - "${PORT:-3000}:3000"
+      - "${PORT:-3300}:3300"
     environment:
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - PORT=3000
+      - PORT=3300
     networks:
       - n8n_network
 
