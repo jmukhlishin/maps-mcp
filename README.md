@@ -1,19 +1,31 @@
 # Google Maps MCP Server (`maps-mcp`)
 
-Server **Model Context Protocol (MCP)** untuk integrasi dengan **Google Maps API** menggunakan TypeScript, Node.js, dan **HTTP Server-Sent Events (SSE) Transport** (`SSEServerTransport` via Express). Server ini dirancang khusus agar dapat diakses oleh **MCP Client node di n8n** (Docker container) maupun MCP client lainnya yang mendukung SSE.
+Server **Model Context Protocol (MCP)** untuk integrasi dengan **Google Maps API (Routes API v2 & Places API New)** menggunakan TypeScript, Node.js, dan **HTTP Server-Sent Events (SSE) Transport** (`SSEServerTransport` via Express). Server ini dirancang khusus agar dapat diakses oleh **MCP Client node di n8n** (Docker container) maupun MCP client lainnya yang mendukung SSE.
 
-## Fitur (Tools)
+## Fitur (Tools) & Google API yang Digunakan
 
-1. **`get_directions`**
-   - Mendapatkan rute dan petunjuk arah dari titik awal (`origin`) ke tujuan (`destination`).
-   - Mendukung mode transportasi: `driving`, `walking`, `bicycling`, `transit`.
-2. **`search_places`**
-   - Mencari tempat berdasarkan kueri teks (misalnya restoran, hotel, tempat wisata) menggunakan Google Maps Places Text Search.
-   - Mendukung filter opsional koordinat `location` dan `radius` (dalam meter).
-3. **`geocode_address`**
+1. **`get_directions` (Google Routes API v2)**
+   - Endpoint: `POST https://routes.googleapis.com/directions/v2:computeRoutes`
+   - Mendapatkan rute, jarak (`distanceMeters`), durasi (`duration`), polyline, dan langkah perjalanan (`legs`) dari `origin` ke `destination`.
+   - Mendukung mode transportasi (`travelMode`):
+     - `DRIVE` (Mobil)
+     - `TWO_WHEELER` (Sepeda Motor)
+     - `BICYCLE` (Sepeda)
+     - `WALK` (Jalan Kaki)
+     - `TRANSIT` (Transportasi Umum)
+
+2. **`search_places` (Google Places API New v1)**
+   - Endpoint: `POST https://places.googleapis.com/v1/places:searchText`
+   - Mencari tempat berdasarkan kueri teks (`textQuery`) dan opsional `locationBias` (koordinat `location` dan `radius` dalam meter).
+   - Mengembalikan `displayName`, `formattedAddress`, `location`, `rating`, dan `userRatingCount`.
+
+3. **`geocode_address` (Google Geocoding API)**
+   - Endpoint: `GET https://maps.googleapis.com/maps/api/geocode/json`
    - Mengubah alamat atau nama lokasi menjadi koordinat geografis (`latitude` dan `longitude`).
-4. **`distance_matrix`**
-   - Menghitung jarak dan waktu tempuh untuk beberapa titik asal (`origins`) dan tujuan (`destinations`).
+
+4. **`distance_matrix` (Google Routes API v2 Compute Route Matrix)**
+   - Endpoint: `POST https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix`
+   - Menghitung jarak dan waktu tempuh untuk beberapa titik asal (`origins`) dan tujuan (`destinations`), mendukung `DRIVE`, `TWO_WHEELER`, `BICYCLE`, `WALK`, dan `TRANSIT`.
 
 ---
 
@@ -29,10 +41,9 @@ Server **Model Context Protocol (MCP)** untuk integrasi dengan **Google Maps API
 
 - **Node.js** (v18 atau lebih baru) atau **Docker & Docker Compose**
 - **Google Maps API Key** dengan layanan berikut yang telah diaktifkan di Google Cloud Console:
-  - Directions API
-  - Places API
-  - Geocoding API
-  - Distance Matrix API
+  - **Routes API**
+  - **Places API (New)**
+  - **Geocoding API**
 
 ---
 
@@ -76,24 +87,13 @@ Server **Model Context Protocol (MCP)** untuk integrasi dengan **Google Maps API
 
 Agar container `maps-mcp` dapat berkomunikasi langsung dengan container `n8n` di server Ubuntu Anda:
 
-1. **Cek nama Docker network tempat container n8n berjalan:**
+1. **Tarik pembaruan kode & rebuild container:**
    ```bash
-   docker network ls
-   ```
-   *(Sesuaikan nama network di bagian `networks` pada file `docker-compose.yml` jika berbeda dari `n8n_network`).*
-
-2. **Pastikan file `.env` sudah terisi `GOOGLE_MAPS_API_KEY`:**
-   ```bash
-   cp .env.example .env
-   nano .env
-   ```
-
-3. **Jalankan dengan Docker Compose:**
-   ```bash
+   git pull origin main
    docker compose up -d --build
    ```
 
-4. **Verifikasi server berjalan:**
+2. **Verifikasi server berjalan di port 3300:**
    ```bash
    curl http://localhost:3300/health
    ```
