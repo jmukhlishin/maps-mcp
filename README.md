@@ -57,7 +57,7 @@ Server **Model Context Protocol (MCP)** untuk integrasi dengan **Google Maps API
    Edit file `.env`:
    ```env
    GOOGLE_MAPS_API_KEY=your_actual_api_key_here
-   PORT=3000
+   PORT=3300
    ```
 
 4. **Build dan Jalankan Server:**
@@ -95,7 +95,7 @@ Agar container `maps-mcp` dapat berkomunikasi langsung dengan container `n8n` di
 
 4. **Verifikasi server berjalan:**
    ```bash
-   curl http://localhost:3000/health
+   curl http://localhost:3300/health
    ```
 
 ---
@@ -109,10 +109,10 @@ Untuk menghubungkan **n8n** ke server MCP ini menggunakan node **MCP Client**:
 3. Masukkan **SSE URL**:
    - **Jika satu Docker network dengan n8n (Direkomendasikan):**
      ```text
-     http://maps-mcp:3000/sse
+     http://maps-mcp:3300/sse
      ```
    - **Jika diakses melalui IP Host / Public URL:**
      ```text
-     http://<IP-SERVER-ATAU-DOMAIN>:3000/sse
+     http://<IP-SERVER-ATAU-DOMAIN>:3300/sse
      ```
 4. Simpan konfigurasi. Node MCP Client di n8n akan otomatis mendeteksi ke-4 tools (`get_directions`, `search_places`, `geocode_address`, `distance_matrix`).
