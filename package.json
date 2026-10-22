@@ -1,7 +1,7 @@
 {
   "name": "maps-mcp",
   "version": "1.0.0",
-  "description": "MCP Server for Google Maps API using TypeScript and Node.js",
+  "description": "MCP Server for Google Maps API using TypeScript, Node.js, and SSE Transport",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -15,9 +15,13 @@
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "dotenv": "^16.4.5"
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
