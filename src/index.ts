@@ -2,6 +2,7 @@
 
 import express, { Request, Response } from "express";
 import cors from "cors";
+import axios from "axios";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
@@ -9,11 +10,6 @@ import {
   ListToolsRequestSchema,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import {
-  Client,
-  TravelMode,
-  UnitSystem,
-} from "@googlemaps/google-maps-services-js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -26,30 +22,91 @@ if (!GOOGLE_MAPS_API_KEY) {
   process.exit(1);
 }
 
-const mapsClient = new Client({});
+/**
+ * Helper to convert an address or "lat,lng" coordinate string into a Routes API v2 Waypoint object.
+ */
+function buildWaypoint(input: string) {
+  const trimmed = input.trim();
+  const coordMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (coordMatch) {
+    return {
+      location: {
+        latLng: {
+          latitude: parseFloat(coordMatch[1]),
+          longitude: parseFloat(coordMatch[2]),
+        },
+      },
+    };
+  }
+  return { address: trimmed };
+}
+
+/**
+ * Normalize travelMode input to Google Routes API v2 RouteTravelMode enum:
+ * 'DRIVE' | 'TWO_WHEELER' | 'BICYCLE' | 'WALK' | 'TRANSIT'
+ */
+function normalizeTravelMode(mode?: string): string {
+  if (!mode) return "DRIVE";
+  const upper = mode.trim().toUpperCase();
+  switch (upper) {
+    case "DRIVE":
+    case "DRIVING":
+      return "DRIVE";
+    case "TWO_WHEELER":
+    case "MOTORCYCLE":
+    case "MOTOR":
+      return "TWO_WHEELER";
+    case "BICYCLE":
+    case "BICYCLING":
+      return "BICYCLE";
+    case "WALK":
+    case "WALKING":
+      return "WALK";
+    case "TRANSIT":
+      return "TRANSIT";
+    default:
+      return "DRIVE";
+  }
+}
 
 const TOOLS: Tool[] = [
   {
     name: "get_directions",
     description:
-      "Get directions and route details between an origin and a destination using Google Maps.",
+      "Get directions and route details between an origin and a destination using Google Routes API v2 (supports car, motorcycle/TWO_WHEELER, bicycle, walking, and transit).",
     inputSchema: {
       type: "object",
       properties: {
         origin: {
           type: "string",
           description:
-            "The starting address, place name, or lat,lng coordinates.",
+            "The starting address, place name, or 'lat,lng' coordinates (e.g., '-6.2088,106.8456').",
         },
         destination: {
           type: "string",
           description:
-            "The destination address, place name, or lat,lng coordinates.",
+            "The destination address, place name, or 'lat,lng' coordinates (e.g., '-6.1754,106.8272').",
+        },
+        travelMode: {
+          type: "string",
+          enum: [
+            "DRIVE",
+            "TWO_WHEELER",
+            "BICYCLE",
+            "WALK",
+            "TRANSIT",
+            "driving",
+            "walking",
+            "bicycling",
+            "transit",
+          ],
+          description:
+            "Mode of transport: 'DRIVE' (mobil), 'TWO_WHEELER' (motor), 'BICYCLE' (sepeda), 'WALK' (jalan kaki), or 'TRANSIT'. Default: 'DRIVE'.",
         },
         mode: {
           type: "string",
-          enum: ["driving", "walking", "bicycling", "transit"],
-          description: "Mode of transport (default: driving).",
+          description:
+            "Alias for travelMode ('DRIVE', 'TWO_WHEELER', 'BICYCLE', 'WALK', 'TRANSIT').",
         },
       },
       required: ["origin", "destination"],
@@ -58,24 +115,24 @@ const TOOLS: Tool[] = [
   {
     name: "search_places",
     description:
-      "Search for places using a text query (e.g., restaurants, hotels, landmarks) via Google Maps Text Search.",
+      "Search for places using a text query (e.g., restaurants, hotels, landmarks) via Google Places API (New) v1.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            "The text string on which to search, for example: 'restaurant in Jakarta'.",
+            "The text string on which to search, for example: 'coffee shop in Jakarta'.",
         },
         location: {
           type: "string",
           description:
-            "Optional latitude,longitude around which to retrieve place information (e.g., '-6.2088,106.8456').",
+            "Optional 'latitude,longitude' around which to bias place results (e.g., '-6.2088,106.8456').",
         },
         radius: {
           type: "number",
           description:
-            "Optional distance in meters within which to bias place results.",
+            "Optional distance in meters within which to bias place results (default: 5000 when location is provided).",
         },
       },
       required: ["query"],
@@ -84,7 +141,7 @@ const TOOLS: Tool[] = [
   {
     name: "geocode_address",
     description:
-      "Convert a human-readable address or place name into geographic coordinates (latitude and longitude).",
+      "Convert a human-readable address or place name into geographic coordinates (latitude and longitude) using Google Geocoding API.",
     inputSchema: {
       type: "object",
       properties: {
@@ -100,29 +157,39 @@ const TOOLS: Tool[] = [
   {
     name: "distance_matrix",
     description:
-      "Calculate travel distance and time for multiple origins and destinations.",
+      "Calculate travel distance and time for multiple origins and destinations using Google Routes API v2 computeRouteMatrix.",
     inputSchema: {
       type: "object",
       properties: {
         origins: {
           type: "array",
           items: { type: "string" },
-          description: "List of starting addresses or coordinates.",
+          description: "List of starting addresses or 'lat,lng' coordinates.",
         },
         destinations: {
           type: "array",
           items: { type: "string" },
-          description: "List of destination addresses or coordinates.",
+          description: "List of destination addresses or 'lat,lng' coordinates.",
+        },
+        travelMode: {
+          type: "string",
+          enum: [
+            "DRIVE",
+            "TWO_WHEELER",
+            "BICYCLE",
+            "WALK",
+            "TRANSIT",
+            "driving",
+            "walking",
+            "bicycling",
+            "transit",
+          ],
+          description:
+            "Mode of transport: 'DRIVE', 'TWO_WHEELER', 'BICYCLE', 'WALK', or 'TRANSIT' (default: 'DRIVE').",
         },
         mode: {
           type: "string",
-          enum: ["driving", "walking", "bicycling", "transit"],
-          description: "Mode of transport (default: driving).",
-        },
-        units: {
-          type: "string",
-          enum: ["metric", "imperial"],
-          description: "Unit system to use for distance (default: metric).",
+          description: "Alias for travelMode.",
         },
       },
       required: ["origins", "destinations"],
@@ -134,7 +201,7 @@ function createMcpServer(): Server {
   const server = new Server(
     {
       name: "maps-mcp",
-      version: "1.0.0",
+      version: "1.1.0",
     },
     {
       capabilities: {
@@ -157,36 +224,38 @@ function createMcpServer(): Server {
         case "get_directions": {
           const origin = String(args?.origin || "");
           const destination = String(args?.destination || "");
-          const mode = (args?.mode as TravelMode) || TravelMode.driving;
+          const rawMode = String(args?.travelMode || args?.mode || "DRIVE");
+          const travelMode = normalizeTravelMode(rawMode);
 
           if (!origin || !destination) {
             throw new Error("Both 'origin' and 'destination' are required.");
           }
 
-          const response = await mapsClient.directions({
-            params: {
-              origin,
-              destination,
-              mode,
-              key: GOOGLE_MAPS_API_KEY!,
-            },
-          });
+          const body: Record<string, any> = {
+            origin: buildWaypoint(origin),
+            destination: buildWaypoint(destination),
+            travelMode,
+            computeAlternativeRoutes: false,
+            languageCode: "id-ID",
+            units: "METRIC",
+          };
 
-          const routes = response.data.routes.map((route) => ({
-            summary: route.summary,
-            legs: route.legs.map((leg) => ({
-              start_address: leg.start_address,
-              end_address: leg.end_address,
-              distance: leg.distance,
-              duration: leg.duration,
-              steps: leg.steps.map((step) => ({
-                instructions: step.html_instructions,
-                distance: step.distance,
-                duration: step.duration,
-                travel_mode: step.travel_mode,
-              })),
-            })),
-          }));
+          if (travelMode === "DRIVE" || travelMode === "TWO_WHEELER") {
+            body.routingPreference = "TRAFFIC_AWARE";
+          }
+
+          const response = await axios.post(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            body,
+            {
+              headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY!,
+                "X-Goog-FieldMask":
+                  "routes.duration,routes.distanceMeters,routes.polyline,routes.legs",
+              },
+            }
+          );
 
           return {
             content: [
@@ -194,8 +263,8 @@ function createMcpServer(): Server {
                 type: "text",
                 text: JSON.stringify(
                   {
-                    status: response.data.status,
-                    routes,
+                    travelMode,
+                    routes: response.data.routes || [],
                   },
                   null,
                   2
@@ -206,32 +275,47 @@ function createMcpServer(): Server {
         }
 
         case "search_places": {
-          const query = String(args?.query || "");
+          const textQuery = String(args?.query || "");
           const location = args?.location ? String(args.location) : undefined;
-          const radius = args?.radius ? Number(args.radius) : undefined;
+          const radius = args?.radius ? Number(args.radius) : 5000;
 
-          if (!query) {
+          if (!textQuery) {
             throw new Error("'query' is required.");
           }
 
-          const response = await mapsClient.textSearch({
-            params: {
-              query,
-              ...(location ? { location } : {}),
-              ...(radius ? { radius } : {}),
-              key: GOOGLE_MAPS_API_KEY!,
-            },
-          });
+          const body: Record<string, any> = {
+            textQuery,
+          };
 
-          const places = response.data.results.map((place) => ({
-            name: place.name,
-            formatted_address: place.formatted_address,
-            location: place.geometry?.location,
-            rating: place.rating,
-            user_ratings_total: place.user_ratings_total,
-            place_id: place.place_id,
-            types: place.types,
-          }));
+          if (location) {
+            const coordMatch = location
+              .trim()
+              .match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+            if (coordMatch) {
+              body.locationBias = {
+                circle: {
+                  center: {
+                    latitude: parseFloat(coordMatch[1]),
+                    longitude: parseFloat(coordMatch[2]),
+                  },
+                  radius,
+                },
+              };
+            }
+          }
+
+          const response = await axios.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            body,
+            {
+              headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY!,
+                "X-Goog-FieldMask":
+                  "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount",
+              },
+            }
+          );
 
           return {
             content: [
@@ -239,8 +323,7 @@ function createMcpServer(): Server {
                 type: "text",
                 text: JSON.stringify(
                   {
-                    status: response.data.status,
-                    places,
+                    places: response.data.places || [],
                   },
                   null,
                   2
@@ -257,16 +340,29 @@ function createMcpServer(): Server {
             throw new Error("'address' is required.");
           }
 
-          const response = await mapsClient.geocode({
-            params: {
-              address,
-              key: GOOGLE_MAPS_API_KEY!,
-            },
-          });
+          const response = await axios.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            {
+              params: {
+                address,
+                key: GOOGLE_MAPS_API_KEY!,
+              },
+            }
+          );
 
-          const results = response.data.results.map((result) => ({
+          if (
+            response.data.status !== "OK" &&
+            response.data.status !== "ZERO_RESULTS"
+          ) {
+            throw new Error(
+              response.data.error_message ||
+                `Geocoding API returned status: ${response.data.status}`
+            );
+          }
+
+          const results = (response.data.results || []).map((result: any) => ({
             formatted_address: result.formatted_address,
-            location: result.geometry.location,
+            location: result.geometry?.location,
             place_id: result.place_id,
             types: result.types,
           }));
@@ -295,11 +391,8 @@ function createMcpServer(): Server {
           const destinations = Array.isArray(args?.destinations)
             ? args.destinations.map(String)
             : [];
-          const mode = (args?.mode as TravelMode) || TravelMode.driving;
-          const units =
-            args?.units === "imperial"
-              ? UnitSystem.imperial
-              : UnitSystem.metric;
+          const rawMode = String(args?.travelMode || args?.mode || "DRIVE");
+          const travelMode = normalizeTravelMode(rawMode);
 
           if (origins.length === 0 || destinations.length === 0) {
             throw new Error(
@@ -307,15 +400,30 @@ function createMcpServer(): Server {
             );
           }
 
-          const response = await mapsClient.distancematrix({
-            params: {
-              origins,
-              destinations,
-              mode,
-              units,
-              key: GOOGLE_MAPS_API_KEY!,
-            },
-          });
+          const body: Record<string, any> = {
+            origins: origins.map((o) => ({ waypoint: buildWaypoint(o) })),
+            destinations: destinations.map((d) => ({
+              waypoint: buildWaypoint(d),
+            })),
+            travelMode,
+          };
+
+          if (travelMode === "DRIVE" || travelMode === "TWO_WHEELER") {
+            body.routingPreference = "TRAFFIC_AWARE";
+          }
+
+          const response = await axios.post(
+            "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix",
+            body,
+            {
+              headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY!,
+                "X-Goog-FieldMask":
+                  "originIndex,destinationIndex,duration,distanceMeters,status,condition",
+              },
+            }
+          );
 
           return {
             content: [
@@ -323,10 +431,10 @@ function createMcpServer(): Server {
                 type: "text",
                 text: JSON.stringify(
                   {
-                    status: response.data.status,
-                    origin_addresses: response.data.origin_addresses,
-                    destination_addresses: response.data.destination_addresses,
-                    rows: response.data.rows,
+                    travelMode,
+                    origins,
+                    destinations,
+                    matrix: response.data,
                   },
                   null,
                   2
@@ -340,8 +448,10 @@ function createMcpServer(): Server {
           throw new Error(`Unknown tool: ${name}`);
       }
     } catch (error: any) {
-      const errorMessage =
+      const apiError =
+        error?.response?.data?.error?.message ||
         error?.response?.data?.error_message ||
+        (error?.response?.data ? JSON.stringify(error.response.data) : null) ||
         error?.message ||
         String(error);
 
@@ -349,7 +459,7 @@ function createMcpServer(): Server {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ error: errorMessage }, null, 2),
+            text: JSON.stringify({ error: apiError }, null, 2),
           },
         ],
         isError: true,
@@ -371,6 +481,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
     status: "ok",
     service: "maps-mcp",
+    version: "1.1.0",
     activeSessions: transports.size,
   });
 });
